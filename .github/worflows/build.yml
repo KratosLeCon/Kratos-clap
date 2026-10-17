@@ -1,1 +1,61 @@
+# Compilation automatique de l'app iOS sur un Mac de GitHub.
+# Se lance à chaque envoi sur la branche main, ou à la main via le bouton "Run workflow".
+name: Compiler Kratos Clap
 
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Afficher la version de Xcode
+        run: xcodebuild -version
+
+      - name: Installer XcodeGen
+        run: brew install xcodegen
+
+      - name: Générer le projet Xcode
+        run: xcodegen generate
+
+      - name: Compiler l'app (sans signature)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project KratosClap.xcodeproj \
+            -scheme KratosClap \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log
+
+      - name: Créer le fichier .ipa
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/KratosClap.app Payload/
+          zip -qry KratosClap.ipa Payload
+
+      - name: Mettre l'IPA à disposition
+        uses: actions/upload-artifact@v4
+        with:
+          name: KratosClap-ipa
+          path: KratosClap.ipa
+          retention-days: 14
+
+      - name: Garder le journal de compilation en cas d'échec
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: journal-compilation
+          path: build.log
+          if-no-files-found: ignore
