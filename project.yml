@@ -1,0 +1,37 @@
+# Description du projet pour XcodeGen.
+# Le fichier .xcodeproj est généré automatiquement par GitHub Actions à partir de ce fichier.
+name: KratosClap
+options:
+  bundleIdPrefix: com.kratosvisuals
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  KratosClap:
+    type: application
+    platform: iOS
+    sources:
+      - KratosClap
+    scheme:
+      gatherCoverageData: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kratosvisuals.clap
+        TARGETED_DEVICE_FAMILY: "1"
+    info:
+      path: KratosClap/Info.plist
+      properties:
+        CFBundleDisplayName: Kratos Clap
+        UILaunchScreen: {}
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        CADisableMinimumFrameDurationOnPhone: true
+        NSMicrophoneUsageDescription: "Le micro sert à mesurer la latence de l'enceinte (étalonnage)."
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
