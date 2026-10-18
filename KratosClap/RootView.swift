@@ -27,6 +27,15 @@ struct RootView: View {
 
                 // Bande invisible le long du bord qui capte le glissement.
                 // Absente quand la session est verrouillée : aucun changement de mode possible.
+                // Liseré de la couleur de l'autre mode, sur le bord où l'on peut glisser :
+                // vert à droite en mode Clip (vers Cinéma), rouge à gauche en mode Cinéma (vers Clip).
+                if !sessionLocked {
+                    EdgeHint(color: cinemaMode ? .red : .green)
+                        .padding(.vertical, 90)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+
                 if !sessionLocked {
                     Color.clear
                         .frame(width: edgeWidth)
@@ -38,6 +47,7 @@ struct RootView: View {
             .clipped()
             .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: cinemaMode)
             .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: dragOffset)
+            .animation(.easeInOut(duration: 0.25), value: sessionLocked)
         }
         .onChange(of: cinemaMode) { _ in
             engine.stopSong()
@@ -152,5 +162,18 @@ struct SessionLockButton: View {
             Image(systemName: sessionLocked ? "lock.fill" : "lock.open")
                 .frame(width: 24)
         }
+    }
+}
+
+/// Liseré lumineux le long du bord de l'écran, qui indique qu'on peut glisser vers l'autre mode.
+struct EdgeHint: View {
+    let color: Color
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 2)
+            .fill(LinearGradient(colors: [color.opacity(0), color, color, color.opacity(0)],
+                                 startPoint: .top, endPoint: .bottom))
+            .frame(width: 3)
+            .shadow(color: color.opacity(0.8), radius: 6)
     }
 }

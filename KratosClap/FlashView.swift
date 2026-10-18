@@ -11,6 +11,14 @@ struct ClapConfig {
     var timecodeMode: TimecodeMode = .none  // timecode affiché après le logo (hors playback)
 }
 
+/// Résultat d'une prise, transmis au journal.
+struct TakeResult {
+    let flashDate: Date?     // heure réelle de la 1re frame blanche
+    let stopDate: Date
+    let rating: Int          // 1 bonne, -1 mauvaise, 0 non notée
+    let hadTimecode: Bool    // vrai si la prise s'est terminée par STOP
+}
+
 enum TimecodeMode {
     case none        // clap simple : retour au noir puis fermeture
     case timeOfDay   // heure du jour (horloge de l'iPhone)
@@ -26,14 +34,15 @@ final class FlashUIView: UIView {
     private let config: ClapConfig
     private let lead: Double
     private let scheduleSound: (CFTimeInterval) -> Bool
-    private let onFinish: () -> Void
+    private let onFinish: (TakeResult) -> Void
 
     private let slateLabel = UILabel()
     private let logoView = UIImageView()
     private let fallbackLogo = UILabel()
     private let timecodeLabel = UILabel()
     private let infoLabel = UILabel()
-    private let stopButton = UIButton(type: .system)
+    private let stopControl = SwipeStopControl()
+    private var flashDate: Date?
     private var displayLink: CADisplayLink?
     private let haptic = UIImpactFeedbackGenerator(style: .heavy)
     private let hasLogo: Bool
@@ -56,7 +65,7 @@ final class FlashUIView: UIView {
 
     init(config: ClapConfig, lead: Double,
          scheduleSound: @escaping (CFTimeInterval) -> Bool,
-         onFinish: @escaping () -> Void) {
+         onFinish: @escaping (TakeResult) -> Void) {
         self.config = config
         self.lead = lead
         self.scheduleSound = scheduleSound
@@ -102,20 +111,16 @@ final class FlashUIView: UIView {
         infoLabel.minimumScaleFactor = 0.4
         infoLabel.isHidden = true
 
-        stopButton.setTitle("■  STOP", for: .normal)
-        stopButton.setTitleColor(.white, for: .normal)
-        stopButton.titleLabel?.font = .systemFont(ofSize: 22, weight: .heavy)
-        stopButton.backgroundColor = UIColor(red: 0.75, green: 0.1, blue: 0.1, alpha: 1)
-        stopButton.layer.cornerRadius = 14
-        stopButton.addTarget(self, action: #selector(stopTapped), for: .touchUpInside)
-        stopButton.isHidden = !hasRunningTimecode
+        // STOP : toucher = prise non notée, glisser à droite = bonne, à gauche = mauvaise
+        stopControl.isHidden = !hasRunningTimecode
+        stopControl.onResult = { [weak self] rating in self?.finish(rating: rating) }
 
         addSubview(slateLabel)
         addSubview(logoView)
         addSubview(fallbackLogo)
         addSubview(timecodeLabel)
         addSubview(infoLabel)
-        addSubview(stopButton)
+        addSubview(stopControl)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) non utilisé") }
@@ -140,10 +145,10 @@ final class FlashUIView: UIView {
                                      width: bounds.width - 32, height: timecodeHeight)
         infoLabel.frame = CGRect(x: 16, y: safeAreaInsets.top + 16,
                                  width: bounds.width - 32, height: 34)
-        let buttonSize = CGSize(width: 180, height: 56)
-        stopButton.frame = CGRect(x: (bounds.width - buttonSize.width) / 2,
-                                  y: bounds.height - safeAreaInsets.bottom - buttonSize.height - 20,
-                                  width: buttonSize.width, height: buttonSize.height)
+        let controlSize = CGSize(width: min(bounds.width - 40, 380), height: 64)
+        stopControl.frame = CGRect(x: (bounds.width - controlSize.width) / 2,
+                                   y: bounds.height - safeAreaInsets.bottom - controlSize.height - 20,
+                                   width: controlSize.width, height: controlSize.height)
     }
 
     func start() {
@@ -160,13 +165,12 @@ final class FlashUIView: UIView {
         displayLink = nil
     }
 
-    @objc private func stopTapped() { finish() }
-
-    private func finish() {
+    private func finish(rating: Int = 0) {
         guard !finished else { return }
         finished = true
         stop()
-        onFinish()
+        onFinish(TakeResult(flashDate: flashDate, stopDate: Date(),
+                            rating: rating, hadTimecode: hasRunningTimecode))
     }
 
     /// Choisit le rafraîchissement du flash et programme le son dessus.
@@ -194,6 +198,7 @@ final class FlashUIView: UIView {
             attempts += 1
         }
         flashStart = start
+        flashDate = Date(timeIntervalSinceNow: start - CACurrentMediaTime())
 
         // Durées converties en nombre entier de rafraîchissements (arrondi au plus proche)
         let frame = 1.0 / config.fps
@@ -251,7 +256,7 @@ final class FlashUIView: UIView {
         fallbackLogo.isHidden = !(logo && !hasLogo)
         timecodeLabel.isHidden = !timecode
         infoLabel.isHidden = !timecode
-        stopButton.isHidden = !stop
+        stopControl.isHidden = !stop
     }
 }
 
@@ -259,7 +264,7 @@ struct FlashView: UIViewRepresentable {
     let config: ClapConfig
     let lead: Double
     let scheduleSound: (CFTimeInterval) -> Bool
-    let onFinish: () -> Void
+    let onFinish: (TakeResult) -> Void
 
     final class Coordinator { var previousBrightness: CGFloat = 0.5 }
 
@@ -279,5 +284,100 @@ struct FlashView: UIViewRepresentable {
     static func dismantleUIView(_ uiView: FlashUIView, coordinator: Coordinator) {
         uiView.stop()
         UIScreen.main.brightness = coordinator.previousBrightness
+    }
+}
+
+/// Bouton STOP qui se glisse :
+/// toucher = arrêt (prise non notée), glisser à droite = BONNE, à gauche = MAUVAISE.
+final class SwipeStopControl: UIView {
+    var onResult: ((Int) -> Void)?
+
+    private let label = UILabel()
+    private let threshold: CGFloat = 80
+    private var crossed = 0
+    private var done = false
+    private let feedback = UISelectionFeedbackGenerator()
+
+    private static let restColor = UIColor(white: 0.2, alpha: 1)
+    private static let goodColor = UIColor(red: 0.13, green: 0.65, blue: 0.3, alpha: 1)
+    private static let badColor = UIColor(red: 0.8, green: 0.15, blue: 0.15, alpha: 1)
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = Self.restColor
+        layer.cornerRadius = 18
+        label.textAlignment = .center
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 20, weight: .heavy)
+        label.adjustsFontSizeToFitWidth = true
+        label.minimumScaleFactor = 0.5
+        addSubview(label)
+        resetText()
+        addGestureRecognizer(UIPanGestureRecognizer(target: self, action: #selector(pan(_:))))
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tap)))
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) non utilisé") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = bounds.insetBy(dx: 14, dy: 0)
+    }
+
+    private func resetText() {
+        label.text = "✗ ◀     ■ STOP     ▶ ✓"
+    }
+
+    private func send(_ rating: Int) {
+        guard !done else { return }
+        done = true
+        onResult?(rating)
+    }
+
+    @objc private func tap() { send(0) }
+
+    @objc private func pan(_ gesture: UIPanGestureRecognizer) {
+        let x = gesture.translation(in: self).x
+        switch gesture.state {
+        case .began:
+            feedback.prepare()
+        case .changed:
+            transform = CGAffineTransform(translationX: x * 0.6, y: 0)
+            let progress = min(1, abs(x) / threshold)
+            backgroundColor = Self.blend(Self.restColor, x >= 0 ? Self.goodColor : Self.badColor, progress)
+            let state = abs(x) >= threshold ? (x > 0 ? 1 : -1) : 0
+            if state != crossed {
+                crossed = state
+                if state != 0 { feedback.selectionChanged() }
+            }
+            if state == 1 {
+                label.text = "BONNE PRISE ✓"
+            } else if state == -1 {
+                label.text = "✗ MAUVAISE PRISE"
+            } else {
+                label.text = x > 0 ? "BONNE ▶" : "◀ MAUVAISE"
+            }
+        case .ended where crossed != 0:
+            send(crossed)
+        case .ended, .cancelled, .failed:
+            crossed = 0
+            resetText()
+            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.7,
+                           initialSpringVelocity: 0, options: []) {
+                self.transform = .identity
+                self.backgroundColor = Self.restColor
+            }
+        default:
+            break
+        }
+    }
+
+    private static func blend(_ a: UIColor, _ b: UIColor, _ t: CGFloat) -> UIColor {
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        a.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        b.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        return UIColor(red: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t,
+                       blue: b1 + (b2 - b1) * t, alpha: 1)
     }
 }

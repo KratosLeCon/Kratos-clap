@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 /// Les réglages techniques sont dans SettingsView (engrenage en haut à droite).
 struct ContentView: View {
     @EnvironmentObject private var engine: ClapEngine
+    @EnvironmentObject private var log: TakeLogStore
 
     @AppStorage("fps") private var fps: Double = 25
     @AppStorage("framesBlanches") private var whiteFrames: Double = 2
@@ -25,6 +26,7 @@ struct ContentView: View {
     @State private var activeClap: ActiveClap?
     @State private var showImporter = false
     @State private var showSettings = false
+    @State private var showJournal = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case artist, title }
@@ -35,6 +37,7 @@ struct ContentView: View {
         let lead: Double
         let offsetMs: Double
         let beep: Bool
+        let entry: TakeEntry
     }
 
     private var playbackReady: Bool { playbackMode && engine.songName != nil }
@@ -53,6 +56,14 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     ModeSwitcher(cinemaMode: $cinemaMode)
+                }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        focusedField = nil
+                        showJournal = true
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
                 }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     SessionLockButton()
@@ -88,6 +99,9 @@ struct ContentView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(engine)
         }
+        .sheet(isPresented: $showJournal) {
+            JournalView().environmentObject(log)
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
             if case .success(let url) = result {
                 engine.importSong(from: url)
@@ -104,8 +118,9 @@ struct ContentView: View {
                           }
                           return engine.scheduleBeep(audibleAt: flashTime, manualOffsetMs: clap.offsetMs)
                       },
-                      onFinish: {
+                      onFinish: { result in
                           engine.stopSong()
+                          log.record(clap.entry, result: result)
                           activeClap = nil
                           take += 1
                       })
@@ -256,8 +271,11 @@ struct ContentView: View {
                                 playbackStart: playbackStart,
                                 songDuration: engine.songDuration)
         engine.prepareForClap()
+        let entry = TakeEntry(mode: "CLIP", production: artist, title: songTitle,
+                              scene: "\(sequence)", take: take, fps: fps,
+                              playbackStart: playbackStart)
         activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs,
-                                beep: playbackStart == nil || beepInPlayback)
+                                beep: playbackStart == nil || beepInPlayback, entry: entry)
     }
 
     static func deltaLabel(_ delta: Double) -> String {

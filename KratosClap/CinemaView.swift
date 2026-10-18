@@ -5,6 +5,7 @@ import SwiftUI
 /// Après le logo, le timecode défile (heure du jour ou depuis le clap) jusqu'à STOP.
 struct CinemaView: View {
     @EnvironmentObject private var engine: ClapEngine
+    @EnvironmentObject private var log: TakeLogStore
 
     // Réglages partagés avec le mode Clip
     @AppStorage("fps") private var fps: Double = 25
@@ -28,6 +29,7 @@ struct CinemaView: View {
 
     @State private var activeClap: ActiveClap?
     @State private var showSettings = false
+    @State private var showJournal = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case production, director, cameraOperator, scene, plan }
@@ -37,6 +39,7 @@ struct CinemaView: View {
         let config: ClapConfig
         let lead: Double
         let offsetMs: Double
+        let entry: TakeEntry
     }
 
     private let cameras = ["A", "B", "C", "D"]
@@ -89,6 +92,14 @@ struct CinemaView: View {
                 ToolbarItem(placement: .principal) {
                     ModeSwitcher(cinemaMode: $cinemaMode)
                 }
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        focusedField = nil
+                        showJournal = true
+                    } label: {
+                        Image(systemName: "list.bullet.rectangle")
+                    }
+                }
                 ToolbarItemGroup(placement: .navigationBarTrailing) {
                     SessionLockButton()
                     Button {
@@ -125,12 +136,16 @@ struct CinemaView: View {
         .sheet(isPresented: $showSettings) {
             SettingsView().environmentObject(engine)
         }
+        .sheet(isPresented: $showJournal) {
+            JournalView().environmentObject(log)
+        }
         .fullScreenCover(item: $activeClap) { clap in
             FlashView(config: clap.config, lead: clap.lead,
                       scheduleSound: { flashTime in
                           engine.scheduleBeep(audibleAt: flashTime, manualOffsetMs: clap.offsetMs)
                       },
-                      onFinish: {
+                      onFinish: { result in
+                          log.record(clap.entry, result: result)
                           activeClap = nil
                           take += 1
                       })
@@ -175,6 +190,10 @@ struct CinemaView: View {
                                 songDuration: 0,
                                 timecodeMode: cinemaTimecode == 0 ? .timeOfDay : .sinceFlash)
         engine.prepareForClap()
-        activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs)
+        let entry = TakeEntry(mode: "CINÉMA", production: production,
+                              scene: scene.uppercased(), shot: plan.uppercased(), take: take,
+                              camera: camera, director: director, cameraOperator: cameraOperator,
+                              fps: fps)
+        activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs, entry: entry)
     }
 }
