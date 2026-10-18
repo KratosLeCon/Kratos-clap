@@ -18,6 +18,14 @@ struct RootView: View {
     @State private var bookmarkForCinema = false
     @State private var transitionID = 0
 
+    // Protection contre les changements de page trop rapides ou accidentels
+    @State private var dragStart: Date?
+    @State private var gestureBlocked = false
+    @GestureState private var gestureActive = false   // repasse à false même si iOS annule le geste
+    private static let minimumDistance: CGFloat = 0.4   // 40 % de la largeur
+    private static let minimumDuration: Double = 0.3    // geste d'au moins 0,3 s
+    private static let cooldown: Double = 0.35          // pause après un changement
+
     private let edgeWidth: CGFloat = 24
 
     /// Passage de page : courbe douce (départ progressif, arrivée très amortie), sans rebond.
@@ -69,7 +77,18 @@ struct RootView: View {
             .clipped()
         }
         .onAppear { bookmarkForCinema = cinemaMode }
+        .onChange(of: gestureActive) { active in
+            // Geste annulé par iOS (appel, notification…) sans passer par onEnded :
+            // on remet tout en place pour que le glissement reste utilisable.
+            guard !active, dragStart != nil else { return }
+            dragStart = nil
+            gestureBlocked = false
+            withAnimation(Self.pageAnimation) { dragOffset = 0 }
+            showBookmarkAfterTransition(for: cinemaMode)
+        }
         .onChange(of: cinemaMode) { newMode in
+            // Aucun nouveau changement possible avant la fin du passage + une courte pause
+            PageTurnGate.occupy(Self.pageDuration + Self.cooldown)
             engine.stopSong()
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                             to: nil, from: nil, for: nil)
@@ -80,7 +99,14 @@ struct RootView: View {
 
     private func edgeSwipe(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
+            .updating($gestureActive) { _, state, _ in state = true }
             .onChanged { value in
+                if dragStart == nil {
+                    dragStart = value.time
+                    // Geste commencé pendant un passage de page : ignoré en entier
+                    gestureBlocked = PageTurnGate.isBusy
+                }
+                guard !gestureBlocked else { return }
                 if bookmarkVisible { hideBookmark() }
                 // Pendant le geste : les pages suivent le doigt, sans aucune animation.
                 // Clip : on ne tire que vers la gauche. Cinéma : que vers la droite.
@@ -88,11 +114,21 @@ struct RootView: View {
                 dragOffset = cinemaMode ? max(0, translation) : min(0, translation)
             }
             .onEnded { value in
+                let started = dragStart ?? value.time
+                dragStart = nil
+                if gestureBlocked {
+                    gestureBlocked = false
+                    return
+                }
+                // Seul un geste délibéré tourne la page : assez long (40 % de la largeur)
+                // ET assez lent (au moins 0,3 s). Un coup rapide sur le bord, même ample,
+                // ramène la page en place. L'élan du doigt n'est plus pris en compte.
                 let moved = value.translation.width
-                let predicted = value.predictedEndTranslation.width
-                let switchMode = cinemaMode
-                    ? (moved > width * 0.3 || predicted > width * 0.5)
-                    : (moved < -width * 0.3 || predicted < -width * 0.5)
+                let duration = value.time.timeIntervalSince(started)
+                let farEnough = cinemaMode
+                    ? moved > width * Self.minimumDistance
+                    : moved < -width * Self.minimumDistance
+                let switchMode = farEnough && duration >= Self.minimumDuration
                 // Une seule animation, qui part de la position actuelle du doigt :
                 // changement de mode et retour du décalage à 0 dans la même transaction.
                 withAnimation(Self.pageAnimation) {
@@ -120,6 +156,14 @@ struct RootView: View {
     }
 }
 
+/// Verrou temporaire partagé : bloque tout changement de page pendant un passage
+/// et la courte pause qui suit (geste sur le bord comme sélecteur du haut).
+enum PageTurnGate {
+    private static var busyUntil = Date.distantPast
+    static var isBusy: Bool { Date() < busyUntil }
+    static func occupy(_ seconds: Double) { busyUntil = Date().addingTimeInterval(seconds) }
+}
+
 /// Sélecteur affiché en haut de chaque mode : « CLIP • CINÉMA ».
 /// Désactivé quand la session est verrouillée (le mode inactif est alors estompé).
 struct ModeSwitcher: View {
@@ -129,10 +173,12 @@ struct ModeSwitcher: View {
     var body: some View {
         HStack(spacing: 14) {
             label("CLIP", active: !cinemaMode) {
+                guard !PageTurnGate.isBusy else { return }
                 withAnimation(RootView.pageAnimation) { cinemaMode = false }
             }
                 .opacity(sessionLocked && cinemaMode ? 0.35 : 1)
             label("CINÉMA", active: cinemaMode) {
+                guard !PageTurnGate.isBusy else { return }
                 withAnimation(RootView.pageAnimation) { cinemaMode = true }
             }
                 .opacity(sessionLocked && !cinemaMode ? 0.35 : 1)
