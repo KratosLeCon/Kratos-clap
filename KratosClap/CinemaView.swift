@@ -41,52 +41,14 @@ struct CinemaView: View {
         let entry: TakeEntry
     }
 
-    private let cameras = ["A", "B", "C", "D"]
 
     var body: some View {
         NavigationStack {
-            Form {
-                Section("Plan") {
-                    Picker("Caméra", selection: $camera) {
-                        ForEach(cameras, id: \.self) { Text("CAM \($0)").tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack(spacing: 12) {
-                        slateField("SCÈNE", text: $scene, field: .scene)
-                        Divider()
-                        slateField("PLAN", text: $plan, field: .plan)
-                        Divider()
-                        CounterView(label: "PRISE", value: $take)
-                    }
-                    ClipNameRow(showCameraPicker: false)
-                }
-
-                Section("Projet") {
-                    TextField("Production / projet", text: $production)
-                        .focused($focusedField, equals: .production)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .director }
-                    TextField("Réalisateur", text: $director)
-                        .focused($focusedField, equals: .director)
-                        .submitLabel(.next)
-                        .onSubmit { focusedField = .cameraOperator }
-                    TextField("Opérateur caméra", text: $cameraOperator)
-                        .focused($focusedField, equals: .cameraOperator)
-                        .submitLabel(.done)
-                        .onSubmit { focusedField = nil }
-                    DatePicker("Date", selection: $date, displayedComponents: .date)
-                }
-
-                Section {
-                    AudioStatusRow(fps: fps) {
-                        focusedField = nil
-                        coordinator.showSettings = true
-                    }
-                }
+            PageScroll {
+                projectCard
+                takeCard
+                audioCard
             }
-            .scrollDismissesKeyboard(.interactively)
-            // Barre du haut et bouton CLAP sont communs aux deux pages (RootView)
             .toolbar(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
@@ -118,21 +80,75 @@ struct CinemaView: View {
         }
     }
 
-    private func slateField(_ label: String, text: Binding<String>, field: Field) -> some View {
-        VStack(spacing: 2) {
-            Text(label)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
-            TextField("—", text: text)
-                .focused($focusedField, equals: field)
-                .multilineTextAlignment(.center)
-                .font(.title3.weight(.bold))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .submitLabel(.done)
-                .onSubmit { focusedField = nil }
+    // MARK: - Projet (en haut, comme sur la page Clip)
+
+    private var projectCard: some View {
+        Card("Projet") {
+            HStack(spacing: 12) {
+                LabeledField(label: "PRODUCTION", placeholder: "Nom du projet", text: $production,
+                                 focus: $focusedField, field: .production)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .director }
+                FieldSeparator()
+                VStack(alignment: .leading, spacing: 2) {
+                    FieldLabel(text: "DATE")
+                    DatePicker("Date", selection: $date, displayedComponents: .date)
+                        .labelsHidden()
+                }
+                .padding(.vertical, 6)
+            }
+            Divider()
+            HStack(spacing: 12) {
+                LabeledField(label: "RÉALISATEUR", placeholder: "Nom", text: $director,
+                                 focus: $focusedField, field: .director)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .cameraOperator }
+                FieldSeparator()
+                LabeledField(label: "OPÉRATEUR", placeholder: "Nom", text: $cameraOperator,
+                                 focus: $focusedField, field: .cameraOperator)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+            }
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: - Prise (même disposition que la page Clip)
+
+    private var takeCard: some View {
+        Card("Prise") {
+            CameraPicker()
+            Divider()
+            HStack(spacing: 12) {
+                LabeledField(label: "SCÈNE", placeholder: "—", text: $scene,
+                                 focus: $focusedField, field: .scene,
+                             centered: true, capitals: true)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+                FieldSeparator()
+                LabeledField(label: "PLAN", placeholder: "—", text: $plan,
+                                 focus: $focusedField, field: .plan,
+                             centered: true, capitals: true)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+                FieldSeparator()
+                CounterView(label: "PRISE", value: $take)
+            }
+            Divider()
+            ClipNameRow()
+        }
+    }
+
+    // MARK: - Sortie audio
+
+    private var audioCard: some View {
+        Card("Sortie audio") {
+            AudioStatusRow(fps: fps) {
+                focusedField = nil
+                coordinator.showSettings = true
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 8)
+        }
     }
 
     private func startClap() {

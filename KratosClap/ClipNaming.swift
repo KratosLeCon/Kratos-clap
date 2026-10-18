@@ -40,10 +40,8 @@ enum ClipNaming {
     }
 }
 
-/// Ligne « Clip » du slate : bobine et numéro de clip (RED), ou nom libre.
+/// Ligne « Clip caméra » : nom du fichier + boutons bobine / clip (RED), ou nom libre.
 struct ClipNameRow: View {
-    let showCameraPicker: Bool
-
     @AppStorage(ClipNaming.formatKey) private var format = 0
     @AppStorage(ClipNaming.cameraKey) private var camera = "A"
     @AppStorage(ClipNaming.reelKey) private var reel = 1
@@ -53,41 +51,55 @@ struct ClipNameRow: View {
 
     var body: some View {
         if format == 0 {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Clip caméra")
-                        .foregroundStyle(.secondary)
-                    Spacer()
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 2) {
+                    FieldLabel(text: "CLIP CAMÉRA")
                     Text(ClipNaming.redName(camera: camera, reel: reel, clip: clip, suffix: suffix))
                         .font(.system(.body, design: .monospaced).weight(.semibold))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.7)
+                        .minimumScaleFactor(0.6)
                 }
-                HStack(spacing: 12) {
-                    if showCameraPicker {
-                        Menu {
-                            ForEach(["A", "B", "C", "D"], id: \.self) { letter in
-                                Button("CAM \(letter)") { camera = letter }
-                            }
-                        } label: {
-                            Text("CAM \(camera)")
-                                .font(.caption.weight(.bold))
-                        }
-                        Divider()
-                    }
-                    // Nouvelle bobine (nouveau mag) : le clip repart à 1
-                    CounterView(label: "BOBINE", value: Binding(get: { reel },
-                                                                set: { reel = $0; clip = 1 }))
-                    Divider()
-                    CounterView(label: "CLIP", value: $clip)
+                Spacer(minLength: 4)
+                // Nouvelle bobine (nouveau mag) : le clip repart à 1
+                MiniStepper(label: "BOBINE",
+                            onMinus: { if reel > 1 { reel -= 1; clip = 1 } },
+                            onPlus: { if reel < 999 { reel += 1; clip = 1 } })
+                MiniStepper(label: "CLIP",
+                            onMinus: { if clip > 1 { clip -= 1 } },
+                            onPlus: { if clip < 999 { clip += 1 } })
+            }
+            .padding(.vertical, 6)
+        } else {
+            VStack(alignment: .leading, spacing: 2) {
+                FieldLabel(text: "CLIP CAMÉRA")
+                TextField("Nom du fichier", text: $freeName)
+                    .font(.system(.body, design: .monospaced))
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+            }
+            .padding(.vertical, 6)
+        }
+    }
+}
+
+/// Libellé au-dessus de deux boutons − / + (le nombre est déjà visible dans le nom).
+struct MiniStepper: View {
+    let label: String
+    let onMinus: () -> Void
+    let onPlus: () -> Void
+
+    var body: some View {
+        VStack(spacing: 2) {
+            FieldLabel(text: label)
+            HStack(spacing: 6) {
+                Button(action: onMinus) {
+                    Image(systemName: "minus.circle.fill").font(.title3)
+                }
+                Button(action: onPlus) {
+                    Image(systemName: "plus.circle.fill").font(.title3)
                 }
             }
-            .padding(.vertical, 2)
-        } else {
-            TextField("Nom du clip caméra", text: $freeName)
-                .font(.system(.body, design: .monospaced))
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
         }
+        .buttonStyle(.borderless)
     }
 }

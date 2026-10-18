@@ -1,9 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// Écran principal, réduit à l'essentiel du tournage :
-/// slate, playback, état de la sortie audio et bouton CLAP.
-/// Les réglages techniques sont dans SettingsView (engrenage en haut à droite).
+/// Page Clip : Projet → Prise → Playback → Sortie audio.
+/// Même ordre et mêmes libellés que la page Cinéma.
+/// La barre du haut et le bouton CLAP sont communs aux deux pages (RootView).
 struct ContentView: View {
     @EnvironmentObject private var engine: ClapEngine
     @EnvironmentObject private var log: TakeLogStore
@@ -21,8 +21,8 @@ struct ContentView: View {
     @AppStorage("modePlayback") private var playbackMode = false
     @AppStorage("debutMorceau") private var songStart: Double = 0
     @AppStorage("bipPlayback") private var beepInPlayback = true
-    @AppStorage("modeCinema") private var cinemaMode = false
     @AppStorage("sessionVerrouillee") private var sessionLocked = false
+    @AppStorage(ClipNaming.cameraKey) private var camera = "A"
 
     @State private var activeClap: ActiveClap?
     @State private var showImporter = false
@@ -43,13 +43,12 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack {
-            Form {
-                slateSection
-                playbackSection
-                statusSection
+            PageScroll {
+                projectCard
+                takeCard
+                playbackCard
+                audioCard
             }
-            .scrollDismissesKeyboard(.interactively)
-            // Barre du haut et bouton CLAP sont communs aux deux pages (RootView)
             .toolbar(.hidden, for: .navigationBar)
             .toolbar {
                 ToolbarItemGroup(placement: .keyboard) {
@@ -90,35 +89,50 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Slate
+    // MARK: - Projet
 
-    private var slateSection: some View {
-        Section("Slate") {
-            TextField("Artiste", text: $artist)
-                .focused($focusedField, equals: .artist)
-                .submitLabel(.next)
-                .onSubmit { focusedField = .title }
-            TextField("Titre du morceau", text: $songTitle)
-                .focused($focusedField, equals: .title)
-                .submitLabel(.done)
-                .onSubmit { focusedField = nil }
+    private var projectCard: some View {
+        Card("Projet") {
             HStack(spacing: 12) {
-                CounterView(label: "SÉQ", value: $sequence)
-                Divider()
+                LabeledField(label: "ARTISTE", placeholder: "Nom de l'artiste", text: $artist,
+                                 focus: $focusedField, field: .artist)
+                    .submitLabel(.next)
+                    .onSubmit { focusedField = .title }
+                FieldSeparator()
+                LabeledField(label: "TITRE", placeholder: "Titre du morceau", text: $songTitle,
+                                 focus: $focusedField, field: .title)
+                    .submitLabel(.done)
+                    .onSubmit { focusedField = nil }
+            }
+        }
+    }
+
+    // MARK: - Prise
+
+    private var takeCard: some View {
+        Card("Prise") {
+            CameraPicker()
+            Divider()
+            HStack(spacing: 12) {
+                CounterView(label: "SÉQUENCE", value: $sequence)
+                FieldSeparator()
                 CounterView(label: "PRISE", value: $take)
             }
-            ClipNameRow(showCameraPicker: true)
+            Divider()
+            ClipNameRow()
         }
     }
 
     // MARK: - Playback
 
-    private var playbackSection: some View {
-        Section("Playback") {
+    private var playbackCard: some View {
+        Card("Playback") {
             Toggle("Mode playback", isOn: $playbackMode)
+                .padding(.vertical, 6)
             if playbackMode {
+                Divider()
                 HStack {
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text(engine.songName ?? "Aucun morceau")
                             .lineLimit(1)
                         if engine.songName != nil {
@@ -133,8 +147,11 @@ struct ContentView: View {
                         showImporter = true
                     }
                     .buttonStyle(.bordered)
+                    .controlSize(.small)
                 }
+                .padding(.vertical, 6)
                 if engine.songName != nil {
+                    Divider()
                     startPointControls
                 }
             }
@@ -142,14 +159,15 @@ struct ContentView: View {
     }
 
     private var startPointControls: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Départ")
-                Spacer()
-                Text(Timecode.string(clampedStart, fps: fps))
-                    .font(.system(.body, design: .monospaced))
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    FieldLabel(text: "DÉPART")
+                    Text(Timecode.string(clampedStart, fps: fps))
+                        .font(.system(.subheadline, design: .monospaced).weight(.semibold))
+                }
+                Slider(value: $songStart, in: 0...max(1, engine.songDuration))
             }
-            Slider(value: $songStart, in: 0...max(1, engine.songDuration))
             HStack {
                 nudgeButton(-5)
                 nudgeButton(-1)
@@ -165,6 +183,7 @@ struct ContentView: View {
                         .frame(width: 28)
                 }
                 .buttonStyle(.borderedProminent)
+                .controlSize(.small)
                 Spacer()
                 nudgeButton(1)
                 nudgeButton(5)
@@ -185,7 +204,7 @@ struct ContentView: View {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     private func nudgeButton(_ delta: Double) -> some View {
@@ -196,14 +215,16 @@ struct ContentView: View {
         .controlSize(.small)
     }
 
-    // MARK: - État de la sortie (raccourci vers les réglages)
+    // MARK: - Sortie audio
 
-    private var statusSection: some View {
-        Section {
+    private var audioCard: some View {
+        Card("Sortie audio") {
             AudioStatusRow(fps: fps) {
                 focusedField = nil
                 coordinator.showSettings = true
             }
+            .buttonStyle(.plain)
+            .padding(.vertical, 8)
         }
     }
 
@@ -218,16 +239,14 @@ struct ContentView: View {
         sessionLocked = true   // le premier clap verrouille la session dans ce mode
         engine.stopSong()
         let playbackStart: Double? = playbackReady ? clampedStart : nil
+        let clipName = ClipNaming.currentName()
         var lines = [
             artist.isEmpty ? "ARTISTE" : artist.uppercased(),
             songTitle.uppercased(),
-            "SÉQ \(sequence) — PRISE \(take)",
+            "SÉQ \(sequence)  ·  PR \(take)",
+            clipName.isEmpty ? "CAM \(camera)" : "CAM \(camera)  ·  \(clipName)",
             Self.fpsLabel(fps)
         ]
-        let clipName = ClipNaming.currentName()
-        if !clipName.isEmpty {
-            lines.append("CLIP \(clipName)")
-        }
         if let position = playbackStart {
             lines.append("PLAYBACK \(Timecode.string(position, fps: fps))")
         }
@@ -237,7 +256,7 @@ struct ContentView: View {
                                 songDuration: engine.songDuration)
         engine.prepareForClap()
         var entry = TakeEntry(mode: "CLIP", production: artist, title: songTitle,
-                              scene: "\(sequence)", take: take, fps: fps,
+                              scene: "\(sequence)", take: take, camera: camera, fps: fps,
                               playbackStart: playbackStart)
         entry.clipName = clipName.isEmpty ? nil : clipName
         activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs,
@@ -250,34 +269,5 @@ struct ContentView: View {
 
     static func fpsLabel(_ value: Double) -> String {
         value == value.rounded() ? "\(Int(value)) i/s" : String(format: "%.3f i/s", value)
-    }
-}
-
-/// Compteur compact − valeur + (séquence, prise).
-struct CounterView: View {
-    let label: String
-    @Binding var value: Int
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.caption.weight(.bold))
-                .foregroundStyle(.secondary)
-            Button {
-                if value > 1 { value -= 1 }
-            } label: {
-                Image(systemName: "minus.circle.fill").font(.title2)
-            }
-            Text("\(value)")
-                .font(.title3.monospacedDigit().weight(.bold))
-                .frame(minWidth: 34)
-            Button {
-                if value < 999 { value += 1 }
-            } label: {
-                Image(systemName: "plus.circle.fill").font(.title2)
-            }
-        }
-        .buttonStyle(.borderless)
-        .frame(maxWidth: .infinity)
     }
 }

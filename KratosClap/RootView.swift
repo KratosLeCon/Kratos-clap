@@ -61,10 +61,15 @@ struct RootView: View {
             // 0 = page Clip affichée, 1 = page Cinéma affichée
             let progress = min(1, max(0, -position / max(1, width)))
 
-            VStack(spacing: 0) {
-                topBar
+            // Les pages occupent tout l'écran ; la barre du haut et le bouton CLAP
+            // flottent par-dessus, sans fond, pour un ensemble d'un seul tenant.
+            ZStack {
                 pages(width: width, position: position, progress: progress)
-                clapButton(progress: progress)
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer()
+                    clapButton(progress: progress)
+                }
             }
         }
         .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
@@ -145,11 +150,14 @@ struct RootView: View {
                         .frame(width: width)
                         .opacity(0.15 + 0.85 * progress)
                 }
-                // Marque-page fixé à la jonction des deux pages, 70 % de la hauteur des pages
+                // Marque-page fixé à la jonction des deux pages : 70 % de la hauteur
+                // disponible entre la barre du haut et le bouton CLAP, centré dans cette zone.
                 .overlay(alignment: .center) {
                     if !sessionLocked {
+                        let usable = max(100, area.size.height - PageLayout.topInset - PageLayout.bottomInset)
                         PageBookmark(color: bookmarkForCinema ? .red : .green,
-                                     height: area.size.height * 0.7)
+                                     height: usable * 0.7)
+                            .offset(y: (PageLayout.topInset - PageLayout.bottomInset) / 2)
                             .opacity(bookmarkVisible ? 1 : 0)
                             .allowsHitTesting(false)
                     }
@@ -162,6 +170,8 @@ struct RootView: View {
                 if !sessionLocked {
                     Color.clear
                         .frame(width: edgeWidth)
+                        .padding(.top, PageLayout.topInset)
+                        .padding(.bottom, PageLayout.bottomInset)
                         .contentShape(Rectangle())
                         .gesture(edgeSwipe(width: width))
                 }
@@ -196,7 +206,9 @@ struct RootView: View {
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 16)
-            .background(tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            // Forme en gélule, comme le bouton d'origine
+            .background(tint, in: Capsule())
+            .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .padding(.horizontal)
