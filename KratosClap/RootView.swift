@@ -22,20 +22,20 @@ struct RootView: View {
                     CinemaView()
                         .frame(width: width)
                 }
+                // Marque-page fixé à la jonction des deux pages : il suit le glissement
+                // avec les pages, sans animation propre. Sa couleur indique l'autre mode
+                // et ne change qu'une fois le passage validé.
+                .overlay(alignment: .center) {
+                    if !sessionLocked {
+                        PageBookmark(color: cinemaMode ? .red : .green)
+                            .allowsHitTesting(false)
+                    }
+                }
                 .frame(width: width, alignment: .leading)
                 .offset(x: (cinemaMode ? -width : 0) + dragOffset)
 
                 // Bande invisible le long du bord qui capte le glissement.
                 // Absente quand la session est verrouillée : aucun changement de mode possible.
-                // Liseré de la couleur de l'autre mode, sur le bord où l'on peut glisser :
-                // vert à droite en mode Clip (vers Cinéma), rouge à gauche en mode Cinéma (vers Clip).
-                if !sessionLocked {
-                    EdgeHint(color: cinemaMode ? .red : .green)
-                        .padding(.vertical, 90)
-                        .allowsHitTesting(false)
-                        .transition(.opacity)
-                }
-
                 if !sessionLocked {
                     Color.clear
                         .frame(width: edgeWidth)
@@ -47,7 +47,6 @@ struct RootView: View {
             .clipped()
             .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: cinemaMode)
             .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: dragOffset)
-            .animation(.easeInOut(duration: 0.25), value: sessionLocked)
         }
         .onChange(of: cinemaMode) { _ in
             engine.stopSong()
@@ -165,15 +164,16 @@ struct SessionLockButton: View {
     }
 }
 
-/// Liseré lumineux le long du bord de l'écran, qui indique qu'on peut glisser vers l'autre mode.
-struct EdgeHint: View {
+/// Marque-page entre les deux pages : languette pleine, sans halo.
+/// Centrée sur la jonction, seule la moitié dépasse au bord de l'écran.
+struct PageBookmark: View {
     let color: Color
 
     var body: some View {
-        RoundedRectangle(cornerRadius: 2)
-            .fill(LinearGradient(colors: [color.opacity(0), color, color, color.opacity(0)],
-                                 startPoint: .top, endPoint: .bottom))
-            .frame(width: 3)
-            .shadow(color: color.opacity(0.8), radius: 6)
+        RoundedRectangle(cornerRadius: 4)
+            .fill(color)
+            .frame(width: 12, height: 72)
+            // Pas d'animation de couleur : elle bascule d'un coup quand le mode change.
+            .animation(nil, value: color)
     }
 }
