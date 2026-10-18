@@ -12,34 +12,49 @@ struct RootView: View {
     // ce qui faisait « sauter » les pages (et le marque-page) avant l'animation de fin.
     @State private var dragOffset: CGFloat = 0
 
+    // Marque-page : estompé dès que la page bouge, réaffiché avec la nouvelle couleur
+    // une fois le changement de page terminé.
+    @State private var bookmarkVisible = true
+    @State private var bookmarkForCinema = false
+    @State private var transitionID = 0
+
     private let edgeWidth: CGFloat = 24
-    static let pageAnimation = Animation.spring(response: 0.35, dampingFraction: 0.9)
+
+    /// Passage de page : courbe douce (départ progressif, arrivée très amortie), sans rebond.
+    static let pageDuration: Double = 0.55
+    static let pageAnimation = Animation.timingCurve(0.45, 0, 0.15, 1, duration: pageDuration)
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             // Zone disponible au-dessus du bouton CLAP (~110 pt en bas)
             let availableHeight = max(100, geometry.size.height - 110)
+            let position = (cinemaMode ? -width : 0) + dragOffset
+            // 0 = page Clip affichée, 1 = page Cinéma affichée
+            let progress = min(1, max(0, -position / max(1, width)))
+
             ZStack(alignment: cinemaMode ? .leading : .trailing) {
                 HStack(spacing: 0) {
+                    // La page qui s'en va s'estompe, la nouvelle apparaît
                     ContentView()
                         .frame(width: width)
+                        .opacity(1 - 0.85 * progress)
                     CinemaView()
                         .frame(width: width)
+                        .opacity(0.15 + 0.85 * progress)
                 }
-                // Marque-page fixé à la jonction des deux pages : il suit le glissement
-                // avec les pages, sans animation propre. Sa couleur indique l'autre mode
-                // et ne change qu'une fois le passage validé.
+                // Marque-page fixé à la jonction des deux pages
                 .overlay(alignment: .center) {
                     if !sessionLocked {
-                        PageBookmark(color: cinemaMode ? .red : .green,
+                        PageBookmark(color: bookmarkForCinema ? .red : .green,
                                      height: availableHeight * 0.7)
                             .offset(y: -55) // centré dans la zone au-dessus du bouton CLAP
+                            .opacity(bookmarkVisible ? 1 : 0)
                             .allowsHitTesting(false)
                     }
                 }
                 .frame(width: width, alignment: .leading)
-                .offset(x: (cinemaMode ? -width : 0) + dragOffset)
+                .offset(x: position)
 
                 // Bande invisible le long du bord qui capte le glissement.
                 // Absente quand la session est verrouillée : aucun changement de mode possible.
@@ -53,16 +68,20 @@ struct RootView: View {
             }
             .clipped()
         }
-        .onChange(of: cinemaMode) { _ in
+        .onAppear { bookmarkForCinema = cinemaMode }
+        .onChange(of: cinemaMode) { newMode in
             engine.stopSong()
             UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
                                             to: nil, from: nil, for: nil)
+            hideBookmark()
+            showBookmarkAfterTransition(for: newMode)
         }
     }
 
     private func edgeSwipe(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
             .onChanged { value in
+                if bookmarkVisible { hideBookmark() }
                 // Pendant le geste : les pages suivent le doigt, sans aucune animation.
                 // Clip : on ne tire que vers la gauche. Cinéma : que vers la droite.
                 let translation = value.translation.width
@@ -80,7 +99,24 @@ struct RootView: View {
                     if switchMode { cinemaMode.toggle() }
                     dragOffset = 0
                 }
+                // Geste annulé : le marque-page revient avec sa couleur une fois la page remise en place
+                if !switchMode { showBookmarkAfterTransition(for: cinemaMode) }
             }
+    }
+
+    private func hideBookmark() {
+        transitionID += 1   // annule un réaffichage en attente
+        withAnimation(.easeOut(duration: 0.15)) { bookmarkVisible = false }
+    }
+
+    private func showBookmarkAfterTransition(for mode: Bool) {
+        transitionID += 1
+        let id = transitionID
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.pageDuration) {
+            guard id == transitionID else { return }
+            bookmarkForCinema = mode   // la couleur change pendant qu'il est invisible
+            withAnimation(.easeIn(duration: 0.25)) { bookmarkVisible = true }
+        }
     }
 }
 
