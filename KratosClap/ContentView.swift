@@ -1,5 +1,9 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
+/// Écran principal, réduit à l'essentiel du tournage :
+/// slate, playback, état de la sortie audio et bouton CLAP.
+/// Les réglages techniques sont dans SettingsView (engrenage en haut à droite).
 struct ContentView: View {
     @EnvironmentObject private var engine: ClapEngine
 
@@ -12,97 +16,96 @@ struct ContentView: View {
     @AppStorage("titre") private var songTitle = ""
     @AppStorage("sequence") private var sequence = 1
     @AppStorage("prise") private var take = 1
+    @AppStorage("modePlayback") private var playbackMode = false
+    @AppStorage("debutMorceau") private var songStart: Double = 0
+    @AppStorage("bipPlayback") private var beepInPlayback = true
+    @AppStorage("modeCinema") private var cinemaMode = false
+    @AppStorage("sessionVerrouillee") private var sessionLocked = false
 
     @State private var activeClap: ActiveClap?
+    @State private var showImporter = false
+    @State private var showSettings = false
+    @FocusState private var focusedField: Field?
+
+    private enum Field { case artist, title }
 
     private struct ActiveClap: Identifiable {
         let id = UUID()
         let config: ClapConfig
         let lead: Double
         let offsetMs: Double
+        let beep: Bool
     }
 
-    private let fpsOptions: [Double] = [23.976, 24, 25, 29.97, 30, 50, 60]
+    private var playbackReady: Bool { playbackMode && engine.songName != nil }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Slate") {
-                    TextField("Artiste", text: $artist)
-                    TextField("Titre du morceau", text: $songTitle)
-                    Stepper("Séquence \(sequence)", value: $sequence, in: 1...999)
-                    Stepper("Prise \(take)", value: $take, in: 1...999)
+                slateSection
+                playbackSection
+                statusSection
+            }
+            // Le clavier se ferme quand on fait défiler la page
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle("Kratos Clap")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ModeSwitcher(cinemaMode: $cinemaMode)
                 }
-
-                Section {
-                    Picker("Cadence caméra", selection: $fps) {
-                        ForEach(fpsOptions, id: \.self) { value in
-                            Text(Self.fpsLabel(value)).tag(value)
-                        }
-                    }
-                    Stepper(String(format: "Frames blanches avant le logo : %.0f", whiteFrames),
-                            value: $whiteFrames, in: 1...6, step: 1)
-                    Stepper(String(format: "Durée du logo : %.1f frame(s)", logoFrames),
-                            value: $logoFrames, in: 0.5...4, step: 0.5)
-                    Stepper(String(format: "Affichage du slate : %.1f s", leadTime),
-                            value: $leadTime, in: 1...5, step: 0.5)
-                } header: {
-                    Text("Image")
-                } footer: {
-                    Text("Le logo apparaît en noir juste après les frames blanches (2 → logo sur la 3e). Le point de synchro est la première frame blanche.")
-                }
-
-                Section {
-                    LabeledContent("Sortie", value: engine.routeName + (engine.routeIsBluetooth ? " (Bluetooth)" : ""))
-                    LabeledContent("Latence utilisée", value: latencyText)
+                ToolbarItemGroup(placement: .navigationBarTrailing) {
+                    SessionLockButton()
                     Button {
-                        Task { await engine.calibrate() }
+                        focusedField = nil
+                        showSettings = true
                     } label: {
-                        HStack {
-                            Text(engine.isCalibrating ? "Mesure en cours…" : "Étalonner cette sortie")
-                            if engine.isCalibrating {
-                                Spacer()
-                                ProgressView()
-                            }
-                        }
+                        Image(systemName: "gearshape")
                     }
-                    .disabled(engine.isCalibrating)
-                    if engine.calibratedLatencyMs != nil {
-                        Button("Effacer l'étalonnage", role: .destructive) { engine.resetCalibration() }
+                }
+                // Bouton « OK » au-dessus du clavier
+                ToolbarItemGroup(placement: .keyboard) {
+                    if focusedField != nil {
+                        Spacer()
+                        Button("OK") { focusedField = nil }
                     }
-                    VStack(alignment: .leading) {
-                        Text(String(format: "Décalage manuel : %+.0f ms", offsetMs))
-                        Slider(value: $offsetMs, in: -100...100, step: 1)
-                    }
-                    if let message = engine.statusMessage {
-                        Text(message).font(.footnote).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Audio")
-                } footer: {
-                    Text("Étalonne depuis la place de l'artiste, volume du plateau, dans le calme. Réétalonne à chaque nouvelle enceinte ou reconnexion.")
                 }
             }
-            .navigationTitle("Kratos Clap")
             .safeAreaInset(edge: .bottom) {
                 Button(action: startClap) {
-                    Text("CLAP")
-                        .font(.system(size: 34, weight: .black))
+                    Text(playbackReady ? "CLAP + PLAYBACK" : "CLAP")
+                        .font(.system(size: playbackReady ? 26 : 34, weight: .black))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 18)
+                        .padding(.vertical, 16)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(.red)
-                .padding()
+                .padding(.horizontal)
+                .padding(.bottom, 8)
                 .disabled(engine.isCalibrating)
+            }
+        }
+        .sheet(isPresented: $showSettings) {
+            SettingsView().environmentObject(engine)
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
+            if case .success(let url) = result {
+                engine.importSong(from: url)
+                songStart = 0
             }
         }
         .fullScreenCover(item: $activeClap) { clap in
             FlashView(config: clap.config, lead: clap.lead,
                       scheduleSound: { flashTime in
-                          engine.scheduleBeep(audibleAt: flashTime, manualOffsetMs: clap.offsetMs)
+                          if let position = clap.config.playbackStart {
+                              return engine.scheduleSong(from: position, audibleAt: flashTime,
+                                                         manualOffsetMs: clap.offsetMs,
+                                                         withBeep: clap.beep)
+                          }
+                          return engine.scheduleBeep(audibleAt: flashTime, manualOffsetMs: clap.offsetMs)
                       },
                       onFinish: {
+                          engine.stopSong()
                           activeClap = nil
                           take += 1
                       })
@@ -112,27 +115,185 @@ struct ContentView: View {
         }
     }
 
-    private var latencyText: String {
-        if let calibrated = engine.calibratedLatencyMs {
-            return String(format: "%.0f ms (étalonnée)", calibrated)
+    // MARK: - Slate
+
+    private var slateSection: some View {
+        Section("Slate") {
+            TextField("Artiste", text: $artist)
+                .focused($focusedField, equals: .artist)
+                .submitLabel(.next)
+                .onSubmit { focusedField = .title }
+            TextField("Titre du morceau", text: $songTitle)
+                .focused($focusedField, equals: .title)
+                .submitLabel(.done)
+                .onSubmit { focusedField = nil }
+            HStack(spacing: 12) {
+                CounterView(label: "SÉQ", value: $sequence)
+                Divider()
+                CounterView(label: "PRISE", value: $take)
+            }
         }
-        return String(format: "%.0f ms (estimation iOS)", engine.systemLatencyMs)
+    }
+
+    // MARK: - Playback
+
+    private var playbackSection: some View {
+        Section("Playback") {
+            Toggle("Mode playback", isOn: $playbackMode)
+            if playbackMode {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(engine.songName ?? "Aucun morceau")
+                            .lineLimit(1)
+                        if engine.songName != nil {
+                            Text(Timecode.short(engine.songDuration))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button(engine.songName == nil ? "Importer" : "Changer") {
+                        focusedField = nil
+                        showImporter = true
+                    }
+                    .buttonStyle(.bordered)
+                }
+                if engine.songName != nil {
+                    startPointControls
+                }
+            }
+        }
+    }
+
+    private var startPointControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Départ")
+                Spacer()
+                Text(Timecode.string(clampedStart, fps: fps))
+                    .font(.system(.body, design: .monospaced))
+            }
+            Slider(value: $songStart, in: 0...max(1, engine.songDuration))
+            HStack {
+                nudgeButton(-5)
+                nudgeButton(-1)
+                Spacer()
+                Button {
+                    if engine.isPreviewing {
+                        engine.stopSong()
+                    } else {
+                        engine.previewSong(from: clampedStart)
+                    }
+                } label: {
+                    Image(systemName: engine.isPreviewing ? "stop.fill" : "play.fill")
+                        .frame(width: 28)
+                }
+                .buttonStyle(.borderedProminent)
+                Spacer()
+                nudgeButton(1)
+                nudgeButton(5)
+            }
+            if engine.isPreviewing {
+                HStack {
+                    TimelineView(.periodic(from: .now, by: 0.1)) { _ in
+                        Text("Écoute : " + Timecode.short(engine.previewPosition() ?? 0))
+                            .font(.system(.footnote, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("Départ ici") {
+                        if let position = engine.previewPosition() { songStart = position }
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func nudgeButton(_ delta: Double) -> some View {
+        Button(Self.deltaLabel(delta)) {
+            songStart = min(max(0, songStart + delta), engine.songDuration)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    // MARK: - État de la sortie (raccourci vers les réglages)
+
+    private var statusSection: some View {
+        Section {
+            AudioStatusRow(fps: fps) {
+                focusedField = nil
+                showSettings = true
+            }
+        }
+    }
+
+    // MARK: - Logique
+
+    private var clampedStart: Double {
+        min(max(0, songStart), max(0, engine.songDuration - 0.5))
     }
 
     private func startClap() {
-        let lines = [
+        focusedField = nil
+        sessionLocked = true   // le premier clap verrouille la session dans ce mode
+        engine.stopSong()
+        let playbackStart: Double? = playbackReady ? clampedStart : nil
+        var lines = [
             artist.isEmpty ? "ARTISTE" : artist.uppercased(),
             songTitle.uppercased(),
             "SÉQ \(sequence) — PRISE \(take)",
             Self.fpsLabel(fps)
-        ].filter { !$0.isEmpty }
-        let config = ClapConfig(fps: fps, whiteFrames: whiteFrames,
-                                logoFrames: logoFrames, slateLines: lines)
+        ]
+        if let position = playbackStart {
+            lines.append("PLAYBACK \(Timecode.string(position, fps: fps))")
+        }
+        let config = ClapConfig(fps: fps, whiteFrames: whiteFrames, logoFrames: logoFrames,
+                                slateLines: lines.filter { !$0.isEmpty },
+                                playbackStart: playbackStart,
+                                songDuration: engine.songDuration)
         engine.prepareForClap()
-        activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs)
+        activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs,
+                                beep: playbackStart == nil || beepInPlayback)
+    }
+
+    static func deltaLabel(_ delta: Double) -> String {
+        delta > 0 ? "+\(Int(delta)) s" : "\(Int(delta)) s"
     }
 
     static func fpsLabel(_ value: Double) -> String {
         value == value.rounded() ? "\(Int(value)) i/s" : String(format: "%.3f i/s", value)
+    }
+}
+
+/// Compteur compact − valeur + (séquence, prise).
+struct CounterView: View {
+    let label: String
+    @Binding var value: Int
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.secondary)
+            Button {
+                if value > 1 { value -= 1 }
+            } label: {
+                Image(systemName: "minus.circle.fill").font(.title2)
+            }
+            Text("\(value)")
+                .font(.title3.monospacedDigit().weight(.bold))
+                .frame(minWidth: 34)
+            Button {
+                if value < 999 { value += 1 }
+            } label: {
+                Image(systemName: "plus.circle.fill").font(.title2)
+            }
+        }
+        .buttonStyle(.borderless)
+        .frame(maxWidth: .infinity)
     }
 }

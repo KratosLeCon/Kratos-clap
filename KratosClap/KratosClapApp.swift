@@ -6,7 +6,7 @@ struct KratosClapApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
                 .environmentObject(engine)
                 .preferredColorScheme(.dark)
                 .onAppear {
