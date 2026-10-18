@@ -8,13 +8,18 @@ struct RootView: View {
     @EnvironmentObject private var engine: ClapEngine
     @AppStorage("modeCinema") private var cinemaMode = false
     @AppStorage("sessionVerrouillee") private var sessionLocked = false
-    @GestureState private var dragOffset: CGFloat = 0
+    // @State et non @GestureState : un @GestureState revient à 0 sans animation au lâcher,
+    // ce qui faisait « sauter » les pages (et le marque-page) avant l'animation de fin.
+    @State private var dragOffset: CGFloat = 0
 
     private let edgeWidth: CGFloat = 24
+    static let pageAnimation = Animation.spring(response: 0.35, dampingFraction: 0.9)
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
+            // Zone disponible au-dessus du bouton CLAP (~110 pt en bas)
+            let availableHeight = max(100, geometry.size.height - 110)
             ZStack(alignment: cinemaMode ? .leading : .trailing) {
                 HStack(spacing: 0) {
                     ContentView()
@@ -27,7 +32,9 @@ struct RootView: View {
                 // et ne change qu'une fois le passage validé.
                 .overlay(alignment: .center) {
                     if !sessionLocked {
-                        PageBookmark(color: cinemaMode ? .red : .green)
+                        PageBookmark(color: cinemaMode ? .red : .green,
+                                     height: availableHeight * 0.7)
+                            .offset(y: -55) // centré dans la zone au-dessus du bouton CLAP
                             .allowsHitTesting(false)
                     }
                 }
@@ -45,8 +52,6 @@ struct RootView: View {
                 }
             }
             .clipped()
-            .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: cinemaMode)
-            .animation(.interactiveSpring(response: 0.35, dampingFraction: 0.86), value: dragOffset)
         }
         .onChange(of: cinemaMode) { _ in
             engine.stopSong()
@@ -57,17 +62,23 @@ struct RootView: View {
 
     private func edgeSwipe(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
-            .updating($dragOffset) { value, state, _ in
+            .onChanged { value in
+                // Pendant le geste : les pages suivent le doigt, sans aucune animation.
                 // Clip : on ne tire que vers la gauche. Cinéma : que vers la droite.
-                state = cinemaMode ? max(0, value.translation.width) : min(0, value.translation.width)
+                let translation = value.translation.width
+                dragOffset = cinemaMode ? max(0, translation) : min(0, translation)
             }
             .onEnded { value in
                 let moved = value.translation.width
                 let predicted = value.predictedEndTranslation.width
-                if !cinemaMode && (moved < -width * 0.3 || predicted < -width * 0.5) {
-                    cinemaMode = true
-                } else if cinemaMode && (moved > width * 0.3 || predicted > width * 0.5) {
-                    cinemaMode = false
+                let switchMode = cinemaMode
+                    ? (moved > width * 0.3 || predicted > width * 0.5)
+                    : (moved < -width * 0.3 || predicted < -width * 0.5)
+                // Une seule animation, qui part de la position actuelle du doigt :
+                // changement de mode et retour du décalage à 0 dans la même transaction.
+                withAnimation(Self.pageAnimation) {
+                    if switchMode { cinemaMode.toggle() }
+                    dragOffset = 0
                 }
             }
     }
@@ -81,9 +92,13 @@ struct ModeSwitcher: View {
 
     var body: some View {
         HStack(spacing: 14) {
-            label("CLIP", active: !cinemaMode) { cinemaMode = false }
+            label("CLIP", active: !cinemaMode) {
+                withAnimation(RootView.pageAnimation) { cinemaMode = false }
+            }
                 .opacity(sessionLocked && cinemaMode ? 0.35 : 1)
-            label("CINÉMA", active: cinemaMode) { cinemaMode = true }
+            label("CINÉMA", active: cinemaMode) {
+                withAnimation(RootView.pageAnimation) { cinemaMode = true }
+            }
                 .opacity(sessionLocked && !cinemaMode ? 0.35 : 1)
         }
         .disabled(sessionLocked)
@@ -168,11 +183,12 @@ struct SessionLockButton: View {
 /// Centrée sur la jonction, seule la moitié dépasse au bord de l'écran.
 struct PageBookmark: View {
     let color: Color
+    let height: CGFloat
 
     var body: some View {
         RoundedRectangle(cornerRadius: 4)
             .fill(color)
-            .frame(width: 12, height: 72)
+            .frame(width: 12, height: height)
             // Pas d'animation de couleur : elle bascule d'un coup quand le mode change.
             .animation(nil, value: color)
     }
