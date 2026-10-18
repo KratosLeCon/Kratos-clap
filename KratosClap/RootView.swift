@@ -1,15 +1,30 @@
 import SwiftUI
 import UIKit
 
+/// Liaison entre la partie fixe (barre du haut, bouton CLAP) et le contenu des pages.
+final class ClapCoordinator: ObservableObject {
+    @Published var clipRequest = 0      // incrémenté = lancer un clap en mode Clip
+    @Published var cinemaRequest = 0    // incrémenté = lancer un clap en mode Cinéma
+    @Published var showSettings = false
+    @Published var showJournal = false
+}
+
 /// Conteneur des deux modes : Clip (playback) et Cinéma.
+/// La barre du haut et le bouton CLAP sont fixes ; seul le contenu des pages glisse.
 /// On passe de l'un à l'autre en glissant depuis le bord de l'écran
 /// (bord droit → Cinéma, bord gauche → Clip) ou en touchant le sélecteur en haut.
 struct RootView: View {
     @EnvironmentObject private var engine: ClapEngine
+    @StateObject private var coordinator = ClapCoordinator()
     @AppStorage("modeCinema") private var cinemaMode = false
     @AppStorage("sessionVerrouillee") private var sessionLocked = false
-    // @State et non @GestureState : un @GestureState revient à 0 sans animation au lâcher,
-    // ce qui faisait « sauter » les pages (et le marque-page) avant l'animation de fin.
+    @AppStorage("modePlayback") private var playbackMode = false
+    // Page affichée, en @State : un changement de @AppStorage n'est pas animé par
+    // withAnimation (il arrive par une notification, hors de la transaction), ce qui
+    // faisait sauter la page et donnait l'impression qu'elle arrivait du mauvais côté.
+    // On anime donc cette copie locale, puis on enregistre le mode dans @AppStorage.
+    @State private var pageCinema = UserDefaults.standard.bool(forKey: "modeCinema")
+    // @State et non @GestureState : un @GestureState revient à 0 sans animation au lâcher.
     @State private var dragOffset: CGFloat = 0
 
     // Marque-page : estompé dès que la page bouge, réaffiché avec la nouvelle couleur
@@ -32,16 +47,95 @@ struct RootView: View {
     static let pageDuration: Double = 0.55
     static let pageAnimation = Animation.timingCurve(0.45, 0, 0.15, 1, duration: pageDuration)
 
+    private static let clipRed = UIColor(red: 1.0, green: 0.23, blue: 0.19, alpha: 1)
+    private static let cinemaGreen = UIColor(red: 0.2, green: 0.74, blue: 0.35, alpha: 1)
+
+    private var clipButtonLabel: String {
+        playbackMode && engine.songName != nil ? "CLAP + PLAYBACK" : "CLAP"
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
-            // Zone disponible au-dessus du bouton CLAP (~110 pt en bas)
-            let availableHeight = max(100, geometry.size.height - 110)
-            let position = (cinemaMode ? -width : 0) + dragOffset
+            let position = (pageCinema ? -width : 0) + dragOffset
             // 0 = page Clip affichée, 1 = page Cinéma affichée
             let progress = min(1, max(0, -position / max(1, width)))
 
-            ZStack(alignment: cinemaMode ? .leading : .trailing) {
+            VStack(spacing: 0) {
+                topBar
+                pages(width: width, position: position, progress: progress)
+                clapButton(progress: progress)
+            }
+        }
+        .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+        .environmentObject(coordinator)
+        .sheet(isPresented: $coordinator.showSettings) {
+            SettingsView().environmentObject(engine)
+        }
+        .sheet(isPresented: $coordinator.showJournal) {
+            JournalView()
+        }
+        .onAppear {
+            pageCinema = cinemaMode
+            bookmarkForCinema = cinemaMode
+        }
+        .onChange(of: gestureActive) { active in
+            // Geste annulé par iOS (appel, notification…) sans passer par onEnded :
+            // on remet tout en place pour que le glissement reste utilisable.
+            guard !active, dragStart != nil else { return }
+            dragStart = nil
+            gestureBlocked = false
+            withAnimation(Self.pageAnimation) { dragOffset = 0 }
+            showBookmarkAfterTransition(for: pageCinema)
+        }
+        // Changement demandé par le sélecteur CLIP · CINÉMA : on anime la page
+        .onChange(of: cinemaMode) { newMode in
+            guard newMode != pageCinema else { return }
+            withAnimation(Self.pageAnimation) { pageCinema = newMode }
+        }
+        // Toute arrivée sur une nouvelle page, quel que soit le déclencheur
+        .onChange(of: pageCinema) { newMode in
+            if cinemaMode != newMode { cinemaMode = newMode }
+            // Aucun nouveau changement possible avant la fin du passage + une courte pause
+            PageTurnGate.occupy(Self.pageDuration + Self.cooldown)
+            engine.stopSong()
+            dismissKeyboard()
+            hideBookmark()
+            showBookmarkAfterTransition(for: newMode)
+        }
+    }
+
+    // MARK: - Barre du haut (fixe)
+
+    private var topBar: some View {
+        HStack(spacing: 18) {
+            Button {
+                dismissKeyboard()
+                coordinator.showJournal = true
+            } label: {
+                Image(systemName: "list.bullet.rectangle")
+            }
+            Spacer()
+            ModeSwitcher(cinemaMode: $cinemaMode)
+            Spacer()
+            SessionLockButton()
+            Button {
+                dismissKeyboard()
+                coordinator.showSettings = true
+            } label: {
+                Image(systemName: "gearshape")
+            }
+        }
+        .font(.title3)
+        .padding(.horizontal, 20)
+        .frame(height: 48)
+    }
+
+    // MARK: - Pages (seule partie qui glisse)
+
+    private func pages(width: CGFloat, position: CGFloat, progress: CGFloat) -> some View {
+        GeometryReader { area in
+            ZStack(alignment: pageCinema ? .leading : .trailing) {
                 HStack(spacing: 0) {
                     // La page qui s'en va s'estompe, la nouvelle apparaît
                     ContentView()
@@ -51,12 +145,11 @@ struct RootView: View {
                         .frame(width: width)
                         .opacity(0.15 + 0.85 * progress)
                 }
-                // Marque-page fixé à la jonction des deux pages
+                // Marque-page fixé à la jonction des deux pages, 70 % de la hauteur des pages
                 .overlay(alignment: .center) {
                     if !sessionLocked {
                         PageBookmark(color: bookmarkForCinema ? .red : .green,
-                                     height: availableHeight * 0.7)
-                            .offset(y: -55) // centré dans la zone au-dessus du bouton CLAP
+                                     height: area.size.height * 0.7)
                             .opacity(bookmarkVisible ? 1 : 0)
                             .allowsHitTesting(false)
                     }
@@ -69,33 +162,65 @@ struct RootView: View {
                 if !sessionLocked {
                     Color.clear
                         .frame(width: edgeWidth)
-                        .padding(.bottom, 110) // laisse le bouton CLAP libre
                         .contentShape(Rectangle())
                         .gesture(edgeSwipe(width: width))
                 }
             }
+            .frame(width: width, height: area.size.height)
             .clipped()
         }
-        .onAppear { bookmarkForCinema = cinemaMode }
-        .onChange(of: gestureActive) { active in
-            // Geste annulé par iOS (appel, notification…) sans passer par onEnded :
-            // on remet tout en place pour que le glissement reste utilisable.
-            guard !active, dragStart != nil else { return }
-            dragStart = nil
-            gestureBlocked = false
-            withAnimation(Self.pageAnimation) { dragOffset = 0 }
-            showBookmarkAfterTransition(for: cinemaMode)
-        }
-        .onChange(of: cinemaMode) { newMode in
-            // Aucun nouveau changement possible avant la fin du passage + une courte pause
-            PageTurnGate.occupy(Self.pageDuration + Self.cooldown)
-            engine.stopSong()
-            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
-                                            to: nil, from: nil, for: nil)
-            hideBookmark()
-            showBookmarkAfterTransition(for: newMode)
-        }
     }
+
+    // MARK: - Bouton CLAP (fixe)
+
+    /// Se teinte progressivement du rouge (Clip) au vert (Cinéma) pendant le glissement,
+    /// et son texte passe en fondu de celui de la page de départ à celui de la page d'arrivée.
+    private func clapButton(progress: CGFloat) -> some View {
+        let tint = Color(uiColor: Self.blend(Self.clipRed, Self.cinemaGreen, progress))
+        return Button {
+            guard !PageTurnGate.isBusy, dragOffset == 0 else { return }
+            if pageCinema {
+                coordinator.cinemaRequest += 1
+            } else {
+                coordinator.clipRequest += 1
+            }
+        } label: {
+            ZStack {
+                Text(clipButtonLabel)
+                    .font(.system(size: clipButtonLabel == "CLAP" ? 34 : 26, weight: .black))
+                    .opacity(1 - progress)
+                Text("CLAP")
+                    .font(.system(size: 34, weight: .black))
+                    .opacity(progress)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 16)
+            .background(tint, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal)
+        .padding(.top, 6)
+        .padding(.bottom, 8)
+        .disabled(engine.isCalibrating)
+        .opacity(engine.isCalibrating ? 0.5 : 1)
+    }
+
+    private static func blend(_ a: UIColor, _ b: UIColor, _ t: CGFloat) -> UIColor {
+        var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+        var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+        a.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+        b.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+        return UIColor(red: r1 + (r2 - r1) * t, green: g1 + (g2 - g1) * t,
+                       blue: b1 + (b2 - b1) * t, alpha: 1)
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder),
+                                        to: nil, from: nil, for: nil)
+    }
+
+    // MARK: - Geste
 
     private func edgeSwipe(width: CGFloat) -> some Gesture {
         DragGesture(minimumDistance: 8)
@@ -111,7 +236,7 @@ struct RootView: View {
                 // Pendant le geste : les pages suivent le doigt, sans aucune animation.
                 // Clip : on ne tire que vers la gauche. Cinéma : que vers la droite.
                 let translation = value.translation.width
-                dragOffset = cinemaMode ? max(0, translation) : min(0, translation)
+                dragOffset = pageCinema ? max(0, translation) : min(0, translation)
             }
             .onEnded { value in
                 let started = dragStart ?? value.time
@@ -121,22 +246,21 @@ struct RootView: View {
                     return
                 }
                 // Seul un geste délibéré tourne la page : assez long (40 % de la largeur)
-                // ET assez lent (au moins 0,3 s). Un coup rapide sur le bord, même ample,
-                // ramène la page en place. L'élan du doigt n'est plus pris en compte.
+                // ET assez lent (au moins 0,3 s). L'élan du doigt n'est pas pris en compte.
                 let moved = value.translation.width
                 let duration = value.time.timeIntervalSince(started)
-                let farEnough = cinemaMode
+                let farEnough = pageCinema
                     ? moved > width * Self.minimumDistance
                     : moved < -width * Self.minimumDistance
                 let switchMode = farEnough && duration >= Self.minimumDuration
                 // Une seule animation, qui part de la position actuelle du doigt :
-                // changement de mode et retour du décalage à 0 dans la même transaction.
+                // changement de page et retour du décalage à 0 dans la même transaction.
                 withAnimation(Self.pageAnimation) {
-                    if switchMode { cinemaMode.toggle() }
+                    if switchMode { pageCinema.toggle() }
                     dragOffset = 0
                 }
-                // Geste annulé : le marque-page revient avec sa couleur une fois la page remise en place
-                if !switchMode { showBookmarkAfterTransition(for: cinemaMode) }
+                // Geste annulé : le marque-page revient une fois la page remise en place
+                if !switchMode { showBookmarkAfterTransition(for: pageCinema) }
             }
     }
 

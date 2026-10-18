@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 struct ContentView: View {
     @EnvironmentObject private var engine: ClapEngine
     @EnvironmentObject private var log: TakeLogStore
+    @EnvironmentObject private var coordinator: ClapCoordinator
 
     @AppStorage("fps") private var fps: Double = 25
     @AppStorage("framesBlanches") private var whiteFrames: Double = 2
@@ -25,8 +26,6 @@ struct ContentView: View {
 
     @State private var activeClap: ActiveClap?
     @State private var showImporter = false
-    @State private var showSettings = false
-    @State private var showJournal = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case artist, title }
@@ -49,32 +48,10 @@ struct ContentView: View {
                 playbackSection
                 statusSection
             }
-            // Le clavier se ferme quand on fait défiler la page
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Kratos Clap")
-            .navigationBarTitleDisplayMode(.inline)
+            // Barre du haut et bouton CLAP sont communs aux deux pages (RootView)
+            .toolbar(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    ModeSwitcher(cinemaMode: $cinemaMode)
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        focusedField = nil
-                        showJournal = true
-                    } label: {
-                        Image(systemName: "list.bullet.rectangle")
-                    }
-                }
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    SessionLockButton()
-                    Button {
-                        focusedField = nil
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
-                // Bouton « OK » au-dessus du clavier
                 ToolbarItemGroup(placement: .keyboard) {
                     if focusedField != nil {
                         Spacer()
@@ -82,26 +59,8 @@ struct ContentView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                Button(action: startClap) {
-                    Text(playbackReady ? "CLAP + PLAYBACK" : "CLAP")
-                        .font(.system(size: playbackReady ? 26 : 34, weight: .black))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-                .disabled(engine.isCalibrating)
-            }
         }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(engine)
-        }
-        .sheet(isPresented: $showJournal) {
-            JournalView().environmentObject(log)
-        }
+        .onChange(of: coordinator.clipRequest) { _ in startClap() }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.audio]) { result in
             if case .success(let url) = result {
                 engine.importSong(from: url)
@@ -121,6 +80,7 @@ struct ContentView: View {
                       onFinish: { result in
                           engine.stopSong()
                           log.record(clap.entry, result: result)
+                          ClipNaming.advance()
                           activeClap = nil
                           take += 1
                       })
@@ -147,6 +107,7 @@ struct ContentView: View {
                 Divider()
                 CounterView(label: "PRISE", value: $take)
             }
+            ClipNameRow(showCameraPicker: true)
         }
     }
 
@@ -241,7 +202,7 @@ struct ContentView: View {
         Section {
             AudioStatusRow(fps: fps) {
                 focusedField = nil
-                showSettings = true
+                coordinator.showSettings = true
             }
         }
     }
@@ -263,6 +224,10 @@ struct ContentView: View {
             "SÉQ \(sequence) — PRISE \(take)",
             Self.fpsLabel(fps)
         ]
+        let clipName = ClipNaming.currentName()
+        if !clipName.isEmpty {
+            lines.append("CLIP \(clipName)")
+        }
         if let position = playbackStart {
             lines.append("PLAYBACK \(Timecode.string(position, fps: fps))")
         }
@@ -271,9 +236,10 @@ struct ContentView: View {
                                 playbackStart: playbackStart,
                                 songDuration: engine.songDuration)
         engine.prepareForClap()
-        let entry = TakeEntry(mode: "CLIP", production: artist, title: songTitle,
+        var entry = TakeEntry(mode: "CLIP", production: artist, title: songTitle,
                               scene: "\(sequence)", take: take, fps: fps,
                               playbackStart: playbackStart)
+        entry.clipName = clipName.isEmpty ? nil : clipName
         activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs,
                                 beep: playbackStart == nil || beepInPlayback, entry: entry)
     }

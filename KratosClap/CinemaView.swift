@@ -6,6 +6,7 @@ import SwiftUI
 struct CinemaView: View {
     @EnvironmentObject private var engine: ClapEngine
     @EnvironmentObject private var log: TakeLogStore
+    @EnvironmentObject private var coordinator: ClapCoordinator
 
     // Réglages partagés avec le mode Clip
     @AppStorage("fps") private var fps: Double = 25
@@ -28,8 +29,6 @@ struct CinemaView: View {
     @State private var date = Date()
 
     @State private var activeClap: ActiveClap?
-    @State private var showSettings = false
-    @State private var showJournal = false
     @FocusState private var focusedField: Field?
 
     private enum Field { case production, director, cameraOperator, scene, plan }
@@ -60,6 +59,7 @@ struct CinemaView: View {
                         Divider()
                         CounterView(label: "PRISE", value: $take)
                     }
+                    ClipNameRow(showCameraPicker: false)
                 }
 
                 Section("Projet") {
@@ -81,34 +81,14 @@ struct CinemaView: View {
                 Section {
                     AudioStatusRow(fps: fps) {
                         focusedField = nil
-                        showSettings = true
+                        coordinator.showSettings = true
                     }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("Kratos Cinéma")
-            .navigationBarTitleDisplayMode(.inline)
+            // Barre du haut et bouton CLAP sont communs aux deux pages (RootView)
+            .toolbar(.hidden, for: .navigationBar)
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    ModeSwitcher(cinemaMode: $cinemaMode)
-                }
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        focusedField = nil
-                        showJournal = true
-                    } label: {
-                        Image(systemName: "list.bullet.rectangle")
-                    }
-                }
-                ToolbarItemGroup(placement: .navigationBarTrailing) {
-                    SessionLockButton()
-                    Button {
-                        focusedField = nil
-                        showSettings = true
-                    } label: {
-                        Image(systemName: "gearshape")
-                    }
-                }
                 ToolbarItemGroup(placement: .keyboard) {
                     if focusedField != nil {
                         Spacer()
@@ -116,29 +96,11 @@ struct CinemaView: View {
                     }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                Button(action: startClap) {
-                    Text("CLAP")
-                        .font(.system(size: 34, weight: .black))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 16)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.green)
-                .padding(.horizontal)
-                .padding(.bottom, 8)
-                .disabled(engine.isCalibrating)
-            }
         }
+        .onChange(of: coordinator.cinemaRequest) { _ in startClap() }
         // Nouvelle scène ou nouveau plan : la prise repart à 1
         .onChange(of: scene) { _ in take = 1 }
         .onChange(of: plan) { _ in take = 1 }
-        .sheet(isPresented: $showSettings) {
-            SettingsView().environmentObject(engine)
-        }
-        .sheet(isPresented: $showJournal) {
-            JournalView().environmentObject(log)
-        }
         .fullScreenCover(item: $activeClap) { clap in
             FlashView(config: clap.config, lead: clap.lead,
                       scheduleSound: { flashTime in
@@ -146,6 +108,7 @@ struct CinemaView: View {
                       },
                       onFinish: { result in
                           log.record(clap.entry, result: result)
+                          ClipNaming.advance()
                           activeClap = nil
                           take += 1
                       })
@@ -176,10 +139,11 @@ struct CinemaView: View {
         focusedField = nil
         sessionLocked = true   // le premier clap verrouille la session dans ce mode
         engine.stopSong()
+        let clipName = ClipNaming.currentName()
         let lines = [
             production.isEmpty ? "PRODUCTION" : production.uppercased(),
             "SC \(scene.uppercased())  ·  PL \(plan.uppercased())  ·  PR \(take)",
-            "CAM \(camera)",
+            clipName.isEmpty ? "CAM \(camera)" : "CAM \(camera)  ·  \(clipName)",
             director.isEmpty ? "" : "RÉAL. \(director.uppercased())",
             cameraOperator.isEmpty ? "" : "OPÉ. \(cameraOperator.uppercased())",
             "\(date.formatted(date: .numeric, time: .omitted))  ·  \(ContentView.fpsLabel(fps))"
@@ -190,10 +154,11 @@ struct CinemaView: View {
                                 songDuration: 0,
                                 timecodeMode: cinemaTimecode == 0 ? .timeOfDay : .sinceFlash)
         engine.prepareForClap()
-        let entry = TakeEntry(mode: "CINÉMA", production: production,
+        var entry = TakeEntry(mode: "CINÉMA", production: production,
                               scene: scene.uppercased(), shot: plan.uppercased(), take: take,
                               camera: camera, director: director, cameraOperator: cameraOperator,
                               fps: fps)
+        entry.clipName = clipName.isEmpty ? nil : clipName
         activeClap = ActiveClap(config: config, lead: leadTime, offsetMs: offsetMs, entry: entry)
     }
 }
