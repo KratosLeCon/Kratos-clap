@@ -6,6 +6,8 @@ struct JournalView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmClear = false
     @State private var exportURL: URL?
+    @State private var renaming: TakeEntry?
+    @State private var newClipName = ""
 
     var body: some View {
         NavigationStack {
@@ -50,6 +52,10 @@ struct JournalView: View {
                                             Button("Bonne prise") { log.setRating(entry.id, 1) }
                                             Button("Mauvaise prise") { log.setRating(entry.id, -1) }
                                             Button("Non notée") { log.setRating(entry.id, 0) }
+                                            Button("Renommer le clip…") {
+                                                newClipName = entry.clipName ?? ""
+                                                renaming = entry
+                                            }
                                         }
                                 }
                             }
@@ -79,6 +85,18 @@ struct JournalView: View {
             .confirmationDialog("Supprimer toutes les prises du journal ?",
                                 isPresented: $confirmClear, titleVisibility: .visible) {
                 Button("Vider le journal", role: .destructive) { log.clear() }
+            }
+            .alert("Nom du clip caméra",
+                   isPresented: Binding(get: { renaming != nil },
+                                        set: { if !$0 { renaming = nil } })) {
+                TextField("A001_C007", text: $newClipName)
+                    .textInputAutocapitalization(.characters)
+                    .autocorrectionDisabled()
+                Button("Annuler", role: .cancel) { renaming = nil }
+                Button("OK") {
+                    if let entry = renaming { log.setClipName(entry.id, newClipName) }
+                    renaming = nil
+                }
             }
             .onAppear { exportURL = log.exportCSV() }
             .onChange(of: log.entries) { _ in exportURL = log.exportCSV() }
@@ -130,6 +148,9 @@ struct TakeRow: View {
 
     private var subtitle: String {
         var text = "\(entry.date.formatted(date: .omitted, time: .shortened)) · TC \(entry.flashTimecode)"
+        if let clip = entry.clipName {
+            text = clip + " · " + text
+        }
         if let duration = entry.duration {
             text += " · " + Timecode.short(duration)
         }

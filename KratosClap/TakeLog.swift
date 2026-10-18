@@ -21,6 +21,7 @@ struct TakeEntry: Codable, Identifiable, Equatable {
     var duration: Double?            // secondes entre flash et STOP
     var rating = 0                   // 1 bonne, -1 mauvaise, 0 non notée
     var note = ""
+    var clipName: String?            // nom du fichier caméra (A001_C007…)
 }
 
 /// Journal des prises, enregistré dans l'app (Documents/journal-prises.json).
@@ -58,6 +59,13 @@ final class TakeLogStore: ObservableObject {
         save()
     }
 
+    func setClipName(_ id: UUID, _ name: String) {
+        guard let index = entries.firstIndex(where: { $0.id == id }) else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        entries[index].clipName = trimmed.isEmpty ? nil : trimmed
+        save()
+    }
+
     func delete(_ id: UUID) {
         entries.removeAll { $0.id == id }
         save()
@@ -89,7 +97,7 @@ final class TakeLogStore: ObservableObject {
         let timeFormatter = DateFormatter()
         timeFormatter.dateFormat = "HH:mm:ss"
 
-        let header = ["Date", "Heure", "Mode", "Production / Artiste", "Titre",
+        let header = ["File Name", "Date", "Heure", "Mode", "Production / Artiste", "Titre",
                       "Scene", "Shot", "Take", "Camera #", "Qualite", "Good Take", "Comments",
                       "TC flash", "TC stop", "Duree (s)", "Depart playback",
                       "Realisateur", "Operateur", "Cadence"]
@@ -98,6 +106,7 @@ final class TakeLogStore: ObservableObject {
         for entry in entries {
             let quality = entry.rating == 1 ? "BONNE" : (entry.rating == -1 ? "MAUVAISE" : "")
             let fields: [String] = [
+                entry.clipName ?? "",
                 dayFormatter.string(from: entry.date),
                 timeFormatter.string(from: entry.date),
                 entry.mode,

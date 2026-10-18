@@ -13,6 +13,8 @@ struct SettingsView: View {
     @AppStorage("dureeSlate") private var leadTime: Double = 2
     @AppStorage("bipPlayback") private var beepInPlayback = true
     @AppStorage("cineTimecode") private var cinemaTimecode = 0
+    @AppStorage(ClipNaming.formatKey) private var clipFormat = 0
+    @AppStorage(ClipNaming.suffixKey) private var clipSuffix = ""
 
     private let fpsOptions: [Double] = [23.976, 24, 25, 29.97, 30, 50, 60]
 
@@ -72,6 +74,25 @@ struct SettingsView: View {
                     Text("Clap")
                 } footer: {
                     Text("Le logo apparaît en noir juste après les frames blanches (2 → logo sur la 3e). Le point de synchro est la première frame blanche.")
+                }
+
+                Section {
+                    Picker("Format", selection: $clipFormat) {
+                        Text("RED (A001_C007)").tag(0)
+                        Text("Libre").tag(1)
+                    }
+                    if clipFormat == 0 {
+                        TextField("Fin du nom (facultatif)", text: $clipSuffix)
+                            .font(.system(.body, design: .monospaced))
+                            .textInputAutocapitalization(.characters)
+                            .autocorrectionDisabled()
+                    }
+                } header: {
+                    Text("Nommage des clips")
+                } footer: {
+                    Text(clipFormat == 0
+                         ? "Le numéro de clip avance de 1 à chaque prise ; changer de bobine le remet à 1. Si la fin du nom de tes fichiers RED (après A001_C007_) est la même pour tout un mag, saisis-la ici pour obtenir le nom complet."
+                         : "Saisis le nom du fichier tel qu'affiché par la caméra avant chaque prise.")
                 }
 
                 Section("Playback") {
